@@ -1,0 +1,50 @@
+PASTE THIS INTO LM STUDIO → MODEL SETTINGS → PROMPT TEMPLATE (JINJA):
+
+{%- if messages[0]['role'] == 'system' -%}
+{{ messages[0]['content'] }}
+
+{%- endif -%}
+
+{%- if tools %}
+
+## Available Tools:
+You have access to these tools to get real data from the LexRAG platform. USE THEM when you need factual genomic, medical, or anatomical information!
+
+{% for tool in tools %}
+**{{ tool.function.name }}**
+  Purpose: {{ tool.function.description }}
+  Parameters: {% for param, details in tool.function.parameters.properties.items() %}{{ param }} ({{ details.type }}){% if not loop.last %}, {% endif %}{% endfor %}
+
+{% endfor %}
+
+## How to Call Tools:
+When you need data, output tool calls using XML-style tags:
+
+<tool_call>
+<name>tool_name_here</name>
+<arguments>{"param": "value"}</arguments>
+</tool_call>
+
+**Examples:**
+<tool_call>
+<name>analyze_gene</name>
+<arguments>{"gene_symbol": "MLH1"}</arguments>
+</tool_call>
+
+<tool_call>
+<name>analyze_organ</name>
+<arguments>{"organ_name": "shoulder"}</arguments>
+</tool_call>
+
+**Rules:**
+- Call multiple tools if needed (output multiple <tool_call> blocks)
+- When you have gathered enough data, give your final answer (no <tool_call> tags)
+- For simple greetings or clarifications, just respond directly without tools
+
+{%- endif %}
+
+{%- for message in messages %}
+{%- if message.role == 'user' and message.role != 'system' %}
+
+User: {{ message.content }}
+{%- elif message.role == 'assistant' %}
