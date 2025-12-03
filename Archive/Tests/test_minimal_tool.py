@@ -102,3 +102,4 @@ print(f"Content preview: '{msg3.get('content', 'NONE')[:200]}'")
 print(f"Finish reason: {result3['choices'][0].get('finish_reason')}")
 
 
+

@@ -260,6 +260,297 @@ class ToolExecutor:
         except Exception as e:
             return {"error": f"Disease risk service error: {e}"}
     
+    # ============== NEW HIGH-VALUE TOOLS ==============
+    
+    def analyze_splice_impact(self, gene_or_variant: str, user_id: str = None) -> Dict[str, Any]:
+        """
+        Analyze splice site impact for a gene or variant.
+        Returns transcript-specific SpliceAI predictions, GTEx tissue dominance, and anatomy mappings.
+        Combines: SpliceAI (3.43B) + GENCODE + GTEx (484M) + UBERON
+        """
+        try:
+            results = {
+                "query": gene_or_variant,
+                "timestamp": datetime.now().isoformat(),
+                "transcripts": [],
+                "splice_predictions": {},
+                "tissue_dominance": {},
+                "anatomy_mappings": []
+            }
+            
+            # Determine if it's a gene or variant
+            is_gene = gene_or_variant.upper().isalpha() or (len(gene_or_variant) < 15 and not gene_or_variant.startswith("rs"))
+            
+            # 1. Get gene/variant data from genomics API
+            if is_gene:
+                gene_response = requests.get(
+                    f"{self.apis['genomics']}/analyze/gene/{gene_or_variant}",
+                    timeout=self.timeout
+                )
+                if gene_response.status_code == 200:
+                    gene_data = gene_response.json()
+                    results["gene_data"] = gene_data
+                    
+                # Query splice predictions for this gene
+                splice_response = requests.get(
+                    f"{self.apis['genomics']}/analyze/splice/{gene_or_variant}",
+                    timeout=self.timeout
+                )
+                if splice_response.status_code == 200:
+                    results["splice_predictions"] = splice_response.json()
+            else:
+                # It's a variant - get variant data
+                variant_response = requests.get(
+                    f"{self.apis['genomics']}/analyze/variant/{gene_or_variant}",
+                    timeout=self.timeout
+                )
+                if variant_response.status_code == 200:
+                    results["variant_data"] = variant_response.json()
+            
+            # 2. Get tissue expression data from metabolics (GTEx)
+            expression_response = requests.get(
+                f"{self.apis['metabolics']}/analyze/expression/{gene_or_variant}",
+                timeout=self.timeout
+            )
+            if expression_response.status_code == 200:
+                expr_data = expression_response.json()
+                results["tissue_dominance"] = expr_data.get("tissue_expression", {})
+                
+                # Identify dominant tissues
+                if results["tissue_dominance"]:
+                    sorted_tissues = sorted(
+                        results["tissue_dominance"].items(),
+                        key=lambda x: x[1] if isinstance(x[1], (int, float)) else 0,
+                        reverse=True
+                    )
+                    results["top_tissues"] = [t[0] for t in sorted_tissues[:5]]
+            
+            # 3. Map top tissues to anatomy
+            top_tissues = results.get("top_tissues", ["brain", "liver", "heart"])
+            for tissue in top_tissues[:3]:
+                anatomy_response = requests.get(
+                    f"{self.apis['anatomics']}/analyze/organ/{tissue}",
+                    timeout=self.timeout
+                )
+                if anatomy_response.status_code == 200:
+                    anatomy_data = anatomy_response.json()
+                    results["anatomy_mappings"].append({
+                        "tissue": tissue,
+                        "anatomical_structures": anatomy_data.get("anatomical_structure", {})
+                    })
+            
+            # Add user context if available
+            if user_id:
+                results["user_context"] = self.get_user_digital_twin(user_id)
+            
+            return results
+            
+        except Exception as e:
+            return {"error": f"Splice impact analysis failed: {e}"}
+    
+    def phenotype_to_differential(self, phenotypes: List[str], user_id: str = None) -> Dict[str, Any]:
+        """
+        Map phenotypes (HPO terms or symptoms) to candidate diseases, genes, and anatomy.
+        Uses: HPO + MONDO + gene-disease links from Neo4j ontology_db
+        """
+        try:
+            results = {
+                "input_phenotypes": phenotypes,
+                "timestamp": datetime.now().isoformat(),
+                "ranked_diseases": [],
+                "matching_phenotypes": {},
+                "implicated_genes": [],
+                "anatomy_focus": []
+            }
+            
+            # Common phenotype to HPO mapping for convenience
+            symptom_to_hpo = {
+                "seizures": "HP:0001250",
+                "hypotonia": "HP:0001252",
+                "intellectual disability": "HP:0001249",
+                "spasticity": "HP:0001257",
+                "ataxia": "HP:0001251",
+                "muscle weakness": "HP:0001324",
+                "developmental delay": "HP:0001263",
+                "short stature": "HP:0004322",
+                "obesity": "HP:0001513",
+                "hearing loss": "HP:0000365",
+                "vision loss": "HP:0000505",
+                "cardiac arrhythmia": "HP:0011675",
+                "hypertension": "HP:0000822",
+                "kidney stones": "HP:0000787",
+                "thyroid nodule": "HP:0002890",
+                "pheochromocytoma": "HP:0002666",
+                "medullary thyroid carcinoma": "HP:0002668"
+            }
+            
+            # Normalize phenotypes - convert symptoms to HPO if possible
+            normalized_hpo = []
+            for pheno in phenotypes:
+                if pheno.startswith("HP:"):
+                    normalized_hpo.append(pheno)
+                elif pheno.lower() in symptom_to_hpo:
+                    normalized_hpo.append(symptom_to_hpo[pheno.lower()])
+                else:
+                    # Keep as-is for text search
+                    normalized_hpo.append(pheno)
+            
+            results["normalized_hpo"] = normalized_hpo
+            
+            # Query anatomics API for phenotype-disease mapping (uses Neo4j)
+            for hpo in normalized_hpo[:5]:  # Limit to avoid overload
+                try:
+                    pheno_response = requests.get(
+                        f"{self.apis['anatomics']}/analyze/phenotype/{hpo}",
+                        timeout=self.timeout
+                    )
+                    if pheno_response.status_code == 200:
+                        pheno_data = pheno_response.json()
+                        results["matching_phenotypes"][hpo] = pheno_data
+                        
+                        # Extract diseases and genes
+                        if "associated_diseases" in pheno_data:
+                            results["ranked_diseases"].extend(pheno_data["associated_diseases"])
+                        if "implicated_genes" in pheno_data:
+                            results["implicated_genes"].extend(pheno_data["implicated_genes"])
+                except:
+                    pass
+            
+            # Also search literature for phenotype combinations
+            search_query = " AND ".join(phenotypes[:3])
+            lit_response = requests.get(
+                f"{self.apis['literature']}/search/literature/{search_query}",
+                timeout=self.timeout
+            )
+            if lit_response.status_code == 200:
+                results["literature_support"] = lit_response.json()
+            
+            # Get population disease risk data for top candidate diseases
+            if results["ranked_diseases"]:
+                top_disease = results["ranked_diseases"][0] if isinstance(results["ranked_diseases"][0], str) else results["ranked_diseases"][0].get("name", "")
+                if top_disease:
+                    risk_response = requests.get(
+                        f"{self.apis['populomics']}/analyze/disease_risk/{top_disease}",
+                        timeout=self.timeout
+                    )
+                    if risk_response.status_code == 200:
+                        results["population_risk"] = risk_response.json()
+            
+            # Deduplicate genes
+            results["implicated_genes"] = list(set(results["implicated_genes"]))[:10]
+            
+            # Map top genes to anatomy
+            for gene in results["implicated_genes"][:3]:
+                gene_response = requests.get(
+                    f"{self.apis['genomics']}/analyze/gene/{gene}",
+                    timeout=self.timeout
+                )
+                if gene_response.status_code == 200:
+                    gene_data = gene_response.json()
+                    if "expression_profile" in gene_data:
+                        top_tissue = list(gene_data["expression_profile"].keys())[:1]
+                        if top_tissue:
+                            results["anatomy_focus"].extend(top_tissue)
+            
+            results["anatomy_focus"] = list(set(results["anatomy_focus"]))
+            
+            # Add user context if available
+            if user_id:
+                results["user_context"] = self.get_user_digital_twin(user_id)
+            
+            return results
+            
+        except Exception as e:
+            return {"error": f"Phenotype differential analysis failed: {e}"}
+    
+    def analyze_regulatory_variant(self, variant_id: str, user_id: str = None) -> Dict[str, Any]:
+        """
+        Interpret non-coding/regulatory variants using ENCODE data.
+        Returns: overlapping regulatory elements, target genes, expression impact, phenotype priors
+        Uses: ENCODE (1.31M) + reg→gene links + GTEx + MONDO/HPO
+        """
+        try:
+            results = {
+                "variant_id": variant_id,
+                "timestamp": datetime.now().isoformat(),
+                "encode_elements": [],
+                "target_genes": [],
+                "expression_impact": {},
+                "phenotype_priors": []
+            }
+            
+            # 1. Get variant details from genomics API
+            variant_response = requests.get(
+                f"{self.apis['genomics']}/analyze/variant/{variant_id}",
+                timeout=self.timeout
+            )
+            if variant_response.status_code == 200:
+                variant_data = variant_response.json()
+                results["variant_data"] = variant_data
+                
+                # Extract chromosome and position for regulatory lookup
+                chrom = variant_data.get("chromosome", "")
+                pos = variant_data.get("position", 0)
+                results["genomic_location"] = {"chrom": chrom, "pos": pos}
+            
+            # 2. Query regulatory elements from genomics API (ENCODE data)
+            regulatory_response = requests.get(
+                f"{self.apis['genomics']}/analyze/regulatory/{variant_id}",
+                timeout=self.timeout
+            )
+            if regulatory_response.status_code == 200:
+                reg_data = regulatory_response.json()
+                results["encode_elements"] = reg_data.get("regulatory_elements", [])
+                results["target_genes"] = reg_data.get("target_genes", [])
+            
+            # 3. For each target gene, get expression data
+            for gene_info in results["target_genes"][:5]:
+                gene_name = gene_info if isinstance(gene_info, str) else gene_info.get("gene", "")
+                if gene_name:
+                    expr_response = requests.get(
+                        f"{self.apis['metabolics']}/analyze/expression/{gene_name}",
+                        timeout=self.timeout
+                    )
+                    if expr_response.status_code == 200:
+                        expr_data = expr_response.json()
+                        results["expression_impact"][gene_name] = expr_data.get("tissue_expression", {})
+            
+            # 4. Get phenotype associations for target genes via anatomics
+            for gene_info in results["target_genes"][:3]:
+                gene_name = gene_info if isinstance(gene_info, str) else gene_info.get("gene", "")
+                if gene_name:
+                    pheno_response = requests.get(
+                        f"{self.apis['anatomics']}/analyze/gene_phenotypes/{gene_name}",
+                        timeout=self.timeout
+                    )
+                    if pheno_response.status_code == 200:
+                        pheno_data = pheno_response.json()
+                        results["phenotype_priors"].append({
+                            "gene": gene_name,
+                            "phenotypes": pheno_data.get("associated_phenotypes", []),
+                            "diseases": pheno_data.get("associated_diseases", [])
+                        })
+            
+            # 5. Classify the regulatory element type
+            if results["encode_elements"]:
+                element_types = [e.get("type", "unknown") for e in results["encode_elements"] if isinstance(e, dict)]
+                results["element_summary"] = {
+                    "enhancers": sum(1 for t in element_types if "enhancer" in t.lower()),
+                    "promoters": sum(1 for t in element_types if "promoter" in t.lower()),
+                    "silencers": sum(1 for t in element_types if "silencer" in t.lower()),
+                    "insulators": sum(1 for t in element_types if "insulator" in t.lower()),
+                    "other": sum(1 for t in element_types if not any(x in t.lower() for x in ["enhancer", "promoter", "silencer", "insulator"]))
+                }
+            
+            # Add user context if available
+            if user_id:
+                results["user_context"] = self.get_user_digital_twin(user_id)
+            
+            return results
+            
+        except Exception as e:
+            return {"error": f"Regulatory variant analysis failed: {e}"}
+    
     def _extract_gene_names(self, query: str) -> List[str]:
         """Extract gene names from user query"""
         # Simple gene name extraction (could be enhanced with NLP)
@@ -354,6 +645,19 @@ class ToolExecutor:
             elif tool_name == "get_disease_risk":
                 disease = tool_params.get("disease")
                 return self.get_disease_risk(disease)
+            
+            # NEW HIGH-VALUE TOOLS
+            elif tool_name == "analyze_splice_impact":
+                gene_or_variant = tool_params.get("gene_or_variant")
+                return self.analyze_splice_impact(gene_or_variant, user_id)
+            
+            elif tool_name == "phenotype_to_differential":
+                phenotypes = tool_params.get("phenotypes", [])
+                return self.phenotype_to_differential(phenotypes, user_id)
+            
+            elif tool_name == "analyze_regulatory_variant":
+                variant_id = tool_params.get("variant_id")
+                return self.analyze_regulatory_variant(variant_id, user_id)
             
             else:
                 return {"error": f"Unknown tool: {tool_name}"}

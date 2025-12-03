@@ -37,8 +37,20 @@ API_HOST = "0.0.0.0"
 
 # Tool Execution Settings
 TOOL_TIMEOUT = 60
-MAX_TOOL_CALLS = 12  # Allow up to 12 iterations for complex agentic reasoning
+MAX_TOOL_CALLS = 12  # Default: 12 iterations for standard reasoning
+MAX_TOOL_CALLS_COMPLEX = 20  # Extended: for complex multi-axis questions
 ENABLE_TOOL_CHAINING = True
+
+# Complexity detection keywords (trigger extended tool budget)
+COMPLEX_QUERY_INDICATORS = [
+    # Multi-axis questions
+    "explain why", "walk through", "connect", "cascade", "pathway", 
+    "mechanism", "differential", "syndrome", "inheritance",
+    # Deep analysis
+    "tissue-specific", "embryologic", "founder effect", "population",
+    # Multiple concepts
+    " and ", "relationship between", "interaction", "combination"
+]
 
 # System Prompt Settings
 SYSTEM_PROMPT_PATH = Path("data/system_prompts/dna_expert_prompt.md")

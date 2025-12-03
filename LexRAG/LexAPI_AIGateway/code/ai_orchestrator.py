@@ -14,7 +14,10 @@ import asyncio
 parent_dir = Path(__file__).parent.parent
 sys.path.insert(0, str(parent_dir))
 
-from config.model_config import MODEL_SERVER_URL, MODEL_CONFIG, LEXRAG_APIS, MAX_TOOL_CALLS
+from config.model_config import (
+    MODEL_SERVER_URL, MODEL_CONFIG, LEXRAG_APIS, 
+    MAX_TOOL_CALLS, MAX_TOOL_CALLS_COMPLEX, COMPLEX_QUERY_INDICATORS
+)
 from code.tool_executor import ToolExecutor
 from code.tool_definitions import (
     get_tool_definitions, 
@@ -55,6 +58,52 @@ Provide accurate, personalized genomic analysis using the available tools to acc
 
 Use tools freely - you have up to 12 rounds to gather information and deliver exceptional analysis."""
     
+    def _calculate_tool_budget(self, query: str) -> int:
+        """
+        Dynamically calculate tool budget based on query complexity.
+        
+        Simple greetings: 3 calls
+        Standard questions: 12 calls (default)
+        Complex multi-axis questions: 20 calls
+        """
+        query_lower = query.lower()
+        
+        # Simple greetings - minimal budget
+        simple_patterns = ["hi", "hello", "hey", "thanks", "thank you", "bye", "goodbye"]
+        if any(query_lower.strip() == p for p in simple_patterns) or len(query_lower) < 15:
+            return 3
+        
+        # Check for complexity indicators
+        complexity_score = 0
+        for indicator in COMPLEX_QUERY_INDICATORS:
+            if indicator.lower() in query_lower:
+                complexity_score += 1
+        
+        # Count potential axes involved (rough heuristic)
+        axis_keywords = {
+            "anatomy": ["organ", "tissue", "structure", "body", "anatomical"],
+            "genomics": ["variant", "gene", "mutation", "snp", "dna", "genetic"],
+            "transcriptomics": ["expression", "splice", "transcript", "rna"],
+            "proteomics": ["protein", "structure", "interaction", "domain"],
+            "metabolomics": ["pathway", "metabolism", "enzyme", "drug"],
+            "epigenomics": ["regulatory", "enhancer", "promoter", "epigenetic"],
+            "phenome": ["symptom", "phenotype", "disease", "syndrome", "cancer"]
+        }
+        
+        axes_involved = 0
+        for axis, keywords in axis_keywords.items():
+            if any(kw in query_lower for kw in keywords):
+                axes_involved += 1
+        
+        # Determine budget
+        if complexity_score >= 3 or axes_involved >= 4:
+            print(f"📊 Complex query detected (score={complexity_score}, axes={axes_involved}) → Extended budget: {MAX_TOOL_CALLS_COMPLEX}")
+            return MAX_TOOL_CALLS_COMPLEX
+        elif complexity_score >= 1 or axes_involved >= 2:
+            return MAX_TOOL_CALLS
+        else:
+            return MAX_TOOL_CALLS
+    
     def process_user_query(self, user_id: str, query: str, conversation_id: str = None, progress_callback: Callable[[Dict], None] = None) -> Dict[str, Any]:
         """Process user query using OpenAI function calling with LM Studio
         
@@ -76,6 +125,12 @@ Use tools freely - you have up to 12 rounds to gather information and deliver ex
                     })
             
             send_progress("starting", "Initializing AI analysis...")
+            
+            # Determine tool budget based on query complexity
+            tool_budget = self._calculate_tool_budget(query)
+            send_progress("complexity_detected", f"Query complexity: {'HIGH' if tool_budget > MAX_TOOL_CALLS else 'STANDARD'}", {
+                "tool_budget": tool_budget
+            })
             
             # Get conversation history
             history = self.conversation_history.get(conversation_id, []) if conversation_id else []
@@ -101,11 +156,11 @@ Use tools freely - you have up to 12 rounds to gather information and deliver ex
             tools_executed = []
             final_response_text = ""
             
-            # Agent Loop - using OpenAI function calling
-            for iteration in range(MAX_TOOL_CALLS):
+            # Agent Loop - using OpenAI function calling (with dynamic budget)
+            for iteration in range(tool_budget):
                 send_progress("thinking", f"AI reasoning step {iteration + 1}...", {
                     "iteration": iteration + 1, 
-                    "max_iterations": MAX_TOOL_CALLS
+                    "max_iterations": tool_budget
                 })
                 print(f"🔄 Agent Iteration {iteration + 1}")
                 

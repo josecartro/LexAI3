@@ -243,6 +243,59 @@ LEXRAG_TOOLS = [
                 "required": ["query", "axes"]
             }
         }
+    },
+    # ============== NEW HIGH-VALUE TOOLS ==============
+    {
+        "type": "function",
+        "function": {
+            "name": "analyze_splice_impact",
+            "description": "Analyze splice site impact for a gene or variant. Returns transcript-specific SpliceAI predictions, GTEx tissue dominance for each transcript, and anatomy mappings. Essential for understanding tissue-specific disease manifestation.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "gene_or_variant": {
+                        "type": "string",
+                        "description": "Gene symbol (e.g., BRCA1) or variant ID (e.g., rs123456)"
+                    }
+                },
+                "required": ["gene_or_variant"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "phenotype_to_differential",
+            "description": "Map phenotypes (HPO terms or symptoms) to candidate diseases, implicated genes, and anatomy focus. Use for syndrome identification and differential diagnosis. Returns ranked MONDO diseases with supporting evidence.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "phenotypes": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of HPO terms (e.g., 'HP:0001250') or symptom descriptions (e.g., 'seizures', 'hypotonia')"
+                    }
+                },
+                "required": ["phenotypes"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "analyze_regulatory_variant",
+            "description": "Interpret non-coding/regulatory variants using ENCODE data. Returns overlapping regulatory elements (enhancers, promoters), target genes with confidence scores, expression impact by tissue, and phenotype priors via MONDO/HPO.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "variant_id": {
+                        "type": "string",
+                        "description": "Variant identifier (rsID or genomic coordinate like chr1:12345:A:G)"
+                    }
+                },
+                "required": ["variant_id"]
+            }
+        }
     }
 ]
 
@@ -265,7 +318,11 @@ def get_human_readable_tool_name(tool_name: str) -> str:
         "get_disease_risk": "disease risk database",
         "analyze_drug_interactions": "drug interaction database",
         "risk_assessment": "comprehensive risk analysis system",
-        "cross_axis_analysis": "multi-system integration engine"
+        "cross_axis_analysis": "multi-system integration engine",
+        # New high-value tools
+        "analyze_splice_impact": "splice prediction + tissue expression database",
+        "phenotype_to_differential": "phenotype-to-disease differential engine",
+        "analyze_regulatory_variant": "ENCODE regulatory element database"
     }
     return tool_names.get(tool_name, tool_name)
 
@@ -329,6 +386,20 @@ def format_tool_progress_message(tool_name: str, params: dict, user_query: str) 
         axes_str = ", ".join(axes) if axes else "multiple systems"
         return f"🔗 Integrating data across {axes_str} for comprehensive analysis..."
     
+    # New high-value tools
+    elif tool_name == "analyze_splice_impact":
+        target = params.get("gene_or_variant", "target")
+        return f"🧬 Analyzing splice impact for {target} across 3.43B SpliceAI predictions + GTEx tissues..."
+    
+    elif tool_name == "phenotype_to_differential":
+        phenotypes = params.get("phenotypes", [])
+        pheno_str = ", ".join(phenotypes[:3]) if phenotypes else "symptoms"
+        return f"🔍 Mapping {pheno_str} to candidate diseases via HPO/MONDO ontologies..."
+    
+    elif tool_name == "analyze_regulatory_variant":
+        variant = params.get("variant_id", "variant")
+        return f"🎯 Analyzing {variant} against 1.31M ENCODE regulatory elements..."
+    
     return f"🔧 Running {tool_name} analysis..."
 
 def format_tool_complete_message(tool_name: str, params: dict, result_summary: str = "") -> str:
@@ -348,8 +419,21 @@ def format_tool_complete_message(tool_name: str, params: dict, result_summary: s
     elif tool_name == "get_user_genomics":
         return f"✅ Loaded your personal genetic variants"
     
+    # New high-value tools
+    elif tool_name == "analyze_splice_impact":
+        target = params.get("gene_or_variant", "target")
+        return f"✅ Found splice predictions + tissue dominance for {target}"
+    
+    elif tool_name == "phenotype_to_differential":
+        return f"✅ Mapped phenotypes to candidate diseases and genes"
+    
+    elif tool_name == "analyze_regulatory_variant":
+        variant = params.get("variant_id", "variant")
+        return f"✅ Found regulatory elements and target genes for {variant}"
+    
     else:
         readable_name = get_human_readable_tool_name(tool_name)
         return f"✅ Retrieved data from {readable_name}"
+
 
 
